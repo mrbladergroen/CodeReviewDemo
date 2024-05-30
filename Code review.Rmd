@@ -1,0 +1,333 @@
+---
+title: "Code review"
+author: "Marco Bladergroen"
+date: "version: 1.0, 2024-02-09, executed `r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding,
+  output_file = file.path(dirname(inputFile), paste0('Code review ', format(Sys.time(), '%Y-%m-%d %H_%M_%S'), '.html'))) })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r my_setup, message=FALSE, warning=FALSE}
+library(plyr)
+library(tidyverse)
+library(tidyr)
+library(rlist)
+library(stringr)
+library(Rcpm)            # install with devtools::install_github("ricoderks/Rcpm")
+library(ggCPM)           # install with devtools::install_github("ricoderks/ggCPM")
+library(plotly)
+library(openxlsx)
+library(ggrepel)
+library(data.table)
+library(ggpubr)
+library(ggsignif)
+library(grid)
+library(ggforce)
+library(scales)
+library(ggnewscale)
+library(knitr)
+```
+
+# Settings
+
+Here you can change your settings.
+
+```{r set_some_general_things, class.source="fold-show"}
+################### YOU ONLY NEED TO SET SOME THINGS HERE #####################
+### define the working directories
+wd <- getwd()
+show_group <- "days_since_onset"
+colorSetLUMC <- c("#003c7d", "#007cc2", "#c0965c", "#e3004f", "black", "#009fbd", "#6e90ab", "#80a51b","#f39200", "#cf7a92", "#8d716f", "#7f5ca3", "#ffcc00")
+colorSetGerda <- c("#36465f", "#00857c", "#97c8ab", "#bf5349", "#e15a54", "#e97264", "#be9851", "#e5aa2a")
+colorNA <- "#6e90a6" #"#D3D3D3"
+colorSetStratify <- c("yellow", "black", "orange", "purple", "green")
+figDotcols <- c(colorSetLUMC, colorSetGerda, colors(), default_color, colorNA)
+colorSetGradient <- c("#003c7d", "#007cc2", "#ffcc00", "#e3004f")
+gradientValues <- c(-1, 0, 8, 17)
+```
+
+Load functions.
+
+```{r my_functions}
+my_plot <- function(mydata, x, y, grp, colour, shape=NULL, test, post_test, polynom=NULL, stratify=NULL, corr=NULL) {
+  colour <- ensym(colour)
+  if(!is.null(shape)){
+    shape <- ensym(shape)
+  }
+  x <- ensym(x)
+  y <- ensym(y)
+  grp <- ensym(grp)
+  if(is.numeric(eval(parse(text=paste("mydata$", colour, sep=""))))){
+    continuous = TRUE
+  } else {
+    continuous = FALSE
+  }
+  cls <- length(unique(mydata[[colour]]))
+  jtter <- 1
+  colTimes <- 20
+  
+  if(!is.null(shape) && !missing("colour")){
+    ifelse(length(unique(mydata[[shape]]))>length(unique(mydata[[colour]])), colTimes <- jtter <- length(unique(mydata[[shape]])), colTimes <- jtter <-length(unique(mydata[[colour]])))
+  } else if(!missing("shape")){
+    colTimes <- jtter <- length(unique(mydata[[shape]]))
+  } else if(!missing("colour")){
+    if(continuous==FALSE){
+      colTimes <- jtter <- length(unique(mydata[[colour]]))
+    } else {
+      jtter <- length(unique(mydata[[x]]))
+    }
+  }
+  
+  ## create the plot
+  if(!is.null(show_sort_order)) {
+    mydata[[show_group]] <- factor(mydata[[show_group]] , levels=c(show_sort_order))
+  }
+  
+  plt <- mydata %>%
+      ggplot(aes(x = {{ x }},
+                 y = value))
+  
+  if(show_spaghetti == TRUE){
+    plt <- plt + geom_line(aes(colour = {{ colour }}, group = {{ grp }}))
+  }
+  
+  if(show_boxplot==TRUE){
+      plt <- plt +
+        geom_boxplot(aes(fill = {{ shape }}), outlier.shape = NA) +
+        guides(colour = "colorbar")
+  }
+
+  if(!is.null(shape)){
+    if(show_boxplot==TRUE && show_spaghetti==FALSE){
+      plt <- plt +
+        geom_point(aes(colour = {{colour}}, shape = {{shape}}),
+                   position=position_jitterdodge(jitter.width=0.4/jtter),
+                   alpha = 1,
+                   size = dotSize)
+    } else {
+      plt <- plt +
+        geom_point(aes(colour = {{colour}}, shape = {{shape}}),
+                   alpha = 1,
+                   size = dotSize)
+    }
+  } else if(!missing("colour")){
+    if(show_boxplot==TRUE && show_spaghetti==FALSE){
+      plt <- plt +
+        geom_point(aes(colour = {{colour}}),
+                   position=position_jitter(width=jtterbase/jtter),
+                   alpha = 1,
+                   size = dotSize)
+    } else {
+      plt <- plt +
+        geom_point(aes(colour = {{colour}}),
+                   alpha = 1,
+                   size = dotSize)
+    }
+  }
+  
+  if(!is.null(polynom) & is.numeric(polynom)){
+    if(!is.null(stratify)){
+      stratify <- ensym(stratify)
+      lcols <- length(figDotcols)
+      figDotcols <<- c(figDotcols[1:cls], colorSetStratify, figDotcols[(cls+1):lcols])
+      plt <- plt + 
+        geom_smooth(aes(x = {{ x }},
+                        y = value,
+                        colour={{stratify}},
+                        fill={{stratify}}), 
+                    method="lm", 
+                    formula = y ~ poly(x,polynom), 
+                    size=0.5, 
+                    se=T, 
+                    linetype="dashed", 
+                    alpha=0.35, 
+                    na.rm = TRUE,
+                    inherit.aes = FALSE)
+    } else {
+      plt <- plt + 
+        geom_smooth(method="lm", formula = y ~ poly(x,polynom), size=0.5, se=T, linetype="dashed", color="black", alpha=0.35, na.rm = TRUE)
+    }
+  } else if(!is.null(polynom) && polynom=="mean"){
+    plt <- plt + 
+      stat_summary(fun=mean,geom="line",lwd=1,aes(group=1),lty="dashed", width=0.1, size=0.5, color="black")
+  } else if(!is.null(polynom) && polynom=="auto"){
+      if(!is.null(stratify)){
+        stratify <- ensym(stratify)
+        lcols <- length(figDotcols)
+        figDotcols <<- c(figDotcols[1:cls], colorSetStratify, figDotcols[(cls+1):lcols])
+        plt <- plt + 
+         geom_smooth(aes(x = {{ x }},
+                        y = value,
+                        colour={{stratify}},
+                        fill={{stratify}}), 
+                    size=0.5, 
+                    se=T, 
+                    linetype="dashed", 
+                    alpha=0.35, 
+                    na.rm = TRUE)
+      } else {
+        plt <- plt + 
+         geom_smooth(aes(x = {{ x }},
+                         y = value), 
+                    size=0.5, 
+                    se=T, 
+                    linetype="dashed", 
+                    alpha=0.35, 
+                    na.rm = TRUE)
+      }
+  }
+
+  if(!is.null(corr)){
+    plt <- plt + stat_cor(label.y.npc="top", label.x.npc = "left", method = corr, size=2.5)
+  }
+  
+  if(!is.null(yScaleTrans) & normality == TRUE){
+    if(!is.null(yLabelTrans)){
+      plt <- plt +
+        scale_y_continuous(trans=yScaleTrans, labels = yLabelTrans$lbls, breaks = yLabelTrans$breaks)
+    } else {
+      plt <- plt +
+        scale_y_continuous(trans=yScaleTrans)
+    }
+
+    ylabel <- paste(yScaleTrans, "(", ylabel, ")", sep="")
+  } else if(!is.null(yLabelTrans)){
+      plt <- plt +
+        scale_y_continuous(labels = eval(parse(text=paste0("scales::", yLabelTrans))))
+  }
+  
+
+  if(is.null(stratify) || show_colour==stratify){
+    plt <- plt +
+      scale_fill_manual(values = rep('white', times = colTimes), na.value = colorNA)
+  } else {
+    plt <- plt +
+      scale_fill_manual(values = colorSetStratify, na.value = colorNA)
+  }
+  
+  plt <- plt +
+      ggtitle(figTitle) +
+      theme_cpm() +
+      coord_cartesian(clip = 'off') +
+      theme(axis.text.x = element_text(angle = xTextAngle,
+                                       hjust = xHjust,
+                                       vjust = xVjust),# This part is for x-axis text
+            plot.margin = unit(c(1, 1, 4, 4), "lines"),
+            panel.spacing = unit(panelSpacing, "lines")) +
+      labs(x=NULL, y=NULL)
+
+  if(!is.null(figDotcols) && length(figDotcols)>0){
+    if(is.null(show_colour)) {
+      plt = plt + scale_color_manual(values=default_color, na.value = colorNA)
+    } else {
+      if(continuous == FALSE){
+        plt = plt + scale_color_manual(values=figDotcols, na.value = colorNA)
+      } else {
+        plt = plt + scale_colour_gradientn(values = rescale(gradientValues), colors = colorSetGradient, na.value = colorNA, limits = c(gradientValues[1], gradientValues[length(gradientValues)]))
+      }
+    }
+  }
+
+  dat_text <- data.frame(xlabel = rep(xlabel, times = length(levels(mydata$Trait))),
+                         ylabel = rep(ylabel, times = length(levels(mydata$Trait))),
+                         Trait = levels(mydata$Trait),
+                         xpos = rep((length(unique(eval(parse(text = paste("mydata$", show_group, sep=""))))) + 1)/2,
+                                    times = length(levels(mydata$Trait)))
+                         )
+
+  if(continuous==FALSE){
+    plt = plt +
+      guides(col = guide_legend(ncol = legendCols))
+  }
+  
+  plt = plt +
+    facet_wrap_paginate( ~ factor(Trait), scales="free", ncol = figCols, nrow=figRows, shrink = TRUE, page=1) +
+      coord_cartesian(ylim=c(0,NA), clip = 'off') +
+    geom_text(size = 4,
+                data = dat_text,
+                mapping = aes(x = xpos, y = -Inf, label = xlabel),
+                hjust = xLabelHjust,
+                vjust = xLabelVjust) + # this part is to create plot x-labels
+    geom_text(size = 4,
+                data = dat_text,
+                mapping = aes(x = -Inf, y = -Inf, label = ylabel),
+                hjust = yLabelHjust,
+                vjust = yLabelVjust,
+                angle = 90) # this part is to create plot y-labels
+  npages <- n_pages(plt)
+
+  dat_text <- NULL
+  if(!is.null(test) && length(show_label)==2){
+      txt = paste("paste(show_label[1], \"=\", signif(Test_all$`", show_label[1], "`, 6), sep = \" \")", sep="")
+      Traits <- factor(Test_all$Trait)
+      if(!is.null(plot_sort_order)){
+        Traits <- factor(Test_all$Trait, levels=plot_sort_order)
+      }
+      dat_text <- data.frame(
+          label = eval(parse(text = txt)),
+          Trait = Traits
+      )
+  }
+
+  if(!is.null(dat_text)){
+    if(!is.null(yScaleTrans) && !is.null(yLabelTrans)){
+      plt = plt +
+        scale_y_continuous(trans=yScaleTrans, expand = expansion(mult = yScaleExt), labels = yLabelTrans$lbls, breaks = yLabelTrans$breaks)
+    } else if(!is.null(yLabelTrans)){
+     plt = plt +
+       scale_y_continuous(expand = expansion(mult = yScaleExt), labels = eval(parse(text=paste0("scales::", yLabelTrans)))) # lower space is 5% as default, upper space >5% to fit p-value
+    } else if(!is.null(yScaleTrans)){
+      plt = plt +
+        scale_y_continuous(trans=yScaleTrans, expand = expansion(mult = yScaleExt)) # lower space is 5% as default, upper space 10% to fit p-value
+    } else {
+      scale_y_continuous(expand = expansion(mult = yScaleExt)) # lower space is 5% as default, upper space 10% to fit p-value
+    }
+    plt = plt +
+      geom_text(size = 3,
+                data = dat_text,
+                mapping = aes(x = Inf, y = Inf, label = label),
+                hjust = pLabelHjust,
+                vjust = pLabelVjust) # This part is to place test result on plot
+  }
+
+  if(!is.null(postTest) && !is.null(show_label)){
+      plt <- plt + stat_pvalue_manual(postTest,
+                                      label = show_label[length(show_label)],
+                                      tip.length = 0.01,
+                                      hide.ns = FALSE,
+                                      y.position = "y.position",
+                                      bracket.shorten = 0.05
+                                      )
+  }
+  
+  pdf(paste0(fileNameBase, ".pdf"), paper='special', width=pageSize$width/25.4, height=((figHeight*figRows)+10)/25.4) #margin is default 5mm: convert width and height from mm to inches
+  for(i in 1:npages){
+    print(plt + facet_wrap_paginate( ~ factor(Trait), scales="free", ncol = figCols, nrow=figRows, shrink = TRUE, page=i))
+  }
+  dev.off()
+  
+  return(plt)
+}
+```
+Do some stuff
+``` {r plot, message=FALSE, warning=FALSE, out.width ="100%", out.height ="100%", fig.width=10, fig.height=10}
+my_plot(mydata = plotData,
+                  x = !!show_group,
+                  y = show_data,
+                  colour = !!show_colour,
+                  test = show_test,
+                  post_test = show_post_test,
+                  polynom = polynom,
+                  stratify = stratify,
+                  corr=corr)
+```
